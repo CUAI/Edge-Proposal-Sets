@@ -117,8 +117,14 @@ def submit_experiments(run_experiment, experiment_configs, run_local):
 
 def run_standard_experiment(dataset, filter_model, rank_model, num):
     filter_result = f"{dataset}_{filter_model}__0_0_sorted_edges.pt"
-    python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --num_sorted_edge {num} --sorted_edge_path {filter_result} --runs 1'     
+    python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --num_sorted_edge {num} --sorted_edge_path {filter_result} --runs 10'     
     return python_script
+
+def run_standard_valid_experiment(dataset, filter_model, rank_model, num):
+    filter_result = f"{dataset}_{filter_model}__0_0_sorted_edges.pt"
+    python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --num_sorted_edge {num} --sorted_edge_path {filter_result} --runs 1 --valid_proposal'     
+    return python_script
+
 
 def run_with_emb_experiment(dataset, filter_model, rank_model, sweep_min, sweep_max, sweep_num, runs):
     filter_result = f"{dataset}_{filter_model}__0_0_sorted_edges.pt"
@@ -151,39 +157,51 @@ if __name__ == "__main__":
     Path("filtered_edges").mkdir(exist_ok=True)
     run_local = True
     parser = argparse.ArgumentParser(description='models')
-    parser.add_argument('--run_local', action="store_true", default=False)
     args = parser.parse_args()
-    
     #### note: it is assumed that the first argument is base model that needs to be generated first
 
-    sweep_experiments_configs = {"ddi": [
-                          ("gcn", "gcn", 510000, 4, 5, 550000),
-#                           ("sage", "gcn", 510000, 4, 5, 550000),
-#                           ("simple", "gcn", 510000, 4, 5, 550000),
-#                           ("adamic_ogb", "gcn", 510000, 4, 5, 550000),     
-#                           ("simplecos", "gcn",  510000, 4, 5, 550000),
-#                           ("gcn", "sage", 510000, 4, 5, 550000),
-#                           ("sage", "sage", 510000, 4, 5, 550000),
-#                           ("simple", "sage", 510000, 4, 5, 550000),
-#                           ("adamic_ogb", "sage", 510000, 4, 5, 550000),     
-#                           ("simplecos", "sage",  510000, 4, 5, 550000),                           
-#                           ("gcn", "simple", 550000, 4, 1, 510000),
-#                           ("sage", "simple", 550000, 4, 1, 510000),
-#                           ("simple", "simple", 550000, 4, 1, 510000),
-#                           ("adamic_ogb", "simple", 510000, 4, 1, 550000),
-#                           ("simplecos", "simple",  510000, 4, 1, 550000),                            
-#                           ("gcn", "simplecos", 510000, 4, 1, 550000),
-#                           ("sage", "simplecos", 510000, 4, 1, 550000),
-#                           ("simple", "simplecos", 510000, 4, 1, 550000),
-#                           ("adamic_ogb", "simplecos", 540000, 4, 1, 550000),     
-#                           ("simplecos", "simplecos",  510000, 4, 1, 550000),
-#                           ("gcn", "adamic_ogb", 510000, 4, 1, 550000),
-#                           ("sage", "adamic_ogb", 510000, 4, 1, 550000),
-#                           ("simple", "adamic_ogb", 510000, 4, 1, 550000),
-#                           ("adamic_ogb", "adamic_ogb", 540000, 4, 1, 550000),     
-#                           ("simplecos", "adamic_ogb",  510000, 4, 1, 550000),                           
+    ddi_experiments_configs = {"ddi": [
+                          ("gcn", "sage", 530000),
                        ],
-                                }
-    submit_experiments(run_sweep_experiment, sweep_experiments_configs, args.run_local)
-#     submit_experiments(run_sweep_valid_experiment, sweep_experiments_configs, args.run_local)
+                                }    
+    submit_experiments(run_standard_experiment, ddi_experiments_configs, run_local)
+
+    collab_experiments_configs = {"collab": [
+                          ("adamic_ogb", "adamic_ogb", 200000),
+                       ],
+                                }    
+    submit_experiments(run_standard_valid_experiment, collab_experiments_configs, run_local)
+
+    
+    ##### sweeping example #####
+#     sweep_experiments_configs = {"ddi": [
+#                           ("gcn", "gcn", 510000, 4, 5, 550000),
+# #                           ("sage", "gcn", 510000, 4, 5, 550000),
+# #                           ("simple", "gcn", 510000, 4, 5, 550000),
+# #                           ("adamic_ogb", "gcn", 510000, 4, 5, 550000),     
+# #                           ("simplecos", "gcn",  510000, 4, 5, 550000),
+# #                           ("gcn", "sage", 510000, 4, 5, 550000),
+# #                           ("sage", "sage", 510000, 4, 5, 550000),
+# #                           ("simple", "sage", 510000, 4, 5, 550000),
+# #                           ("adamic_ogb", "sage", 510000, 4, 5, 550000),     
+# #                           ("simplecos", "sage",  510000, 4, 5, 550000),                           
+# #                           ("gcn", "simple", 550000, 4, 1, 510000),
+# #                           ("sage", "simple", 550000, 4, 1, 510000),
+# #                           ("simple", "simple", 550000, 4, 1, 510000),
+# #                           ("adamic_ogb", "simple", 510000, 4, 1, 550000),
+# #                           ("simplecos", "simple",  510000, 4, 1, 550000),                            
+# #                           ("gcn", "simplecos", 510000, 4, 1, 550000),
+# #                           ("sage", "simplecos", 510000, 4, 1, 550000),
+# #                           ("simple", "simplecos", 510000, 4, 1, 550000),
+# #                           ("adamic_ogb", "simplecos", 540000, 4, 1, 550000),     
+# #                           ("simplecos", "simplecos",  510000, 4, 1, 550000),
+# #                           ("gcn", "adamic_ogb", 510000, 4, 1, 550000),
+# #                           ("sage", "adamic_ogb", 510000, 4, 1, 550000),
+# #                           ("simple", "adamic_ogb", 510000, 4, 1, 550000),
+# #                           ("adamic_ogb", "adamic_ogb", 540000, 4, 1, 550000),     
+# #                           ("simplecos", "adamic_ogb",  510000, 4, 1, 550000),                           
+#                        ],
+#                                 }
+#     submit_experiments(run_sweep_experiment, sweep_experiments_configs, run_local)
+#     submit_experiments(run_sweep_valid_experiment, sweep_experiments_configs, run_local)
 
