@@ -9,6 +9,10 @@ from torch_geometric.utils import to_undirected
 import numpy as np
 
 from ogb.linkproppred import PygLinkPropPredDataset
+from reddit.data import RedditDataset
+from email_data.data import EmailDataset
+from twitch.data import TwitchDataset
+from fb.data import FBDataset
 from models import build_model, default_model_configs
 from train_and_eval import train, test, hits, evaluators, test_adamic, test_katz
 
@@ -37,6 +41,14 @@ def get_dataset(dataset):
         dataset = PygLinkPropPredDataset(name='ogbl-ddi')
     elif dataset == "collab":
         dataset = PygLinkPropPredDataset(name='ogbl-collab')
+    elif dataset == "email":
+        dataset = EmailDataset()
+    elif dataset == "reddit":
+        dataset = RedditDataset()
+    elif dataset == "twitch":
+        dataset = TwitchDataset()
+    elif dataset == "fb":
+        dataset = FBDataset() 
     else:
         raise NotImplemented
     return dataset
