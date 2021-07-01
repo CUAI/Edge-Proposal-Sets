@@ -1,6 +1,6 @@
 # Edge Proposal Sets for Link Prediction
 
-This directory contains code for the paper. Edge Proposal Sets for Link Prediction.
+This directory contains code for the paper. Edge Proposal Sets for Link Prediction. https://arxiv.org/abs/2106.15810
 
 ## Software Requirements
 
