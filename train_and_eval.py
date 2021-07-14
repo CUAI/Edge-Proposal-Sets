@@ -154,6 +154,7 @@ def test(model, data, split_edge, evaluator, batch_size, args, device):
 
 def test_adamic(model, data, split_edge, evaluator, batch_size, args, device):
     assert args.model == "adamic_ogb"
+    A_eval = get_A(data.adj_t, data.num_nodes)
     A = get_A(data.full_adj_t, data.num_nodes)
     pos_val_edge, neg_val_edge = get_pos_neg_edges('valid', split_edge, 
                                                    data.edge_index, 
@@ -163,8 +164,8 @@ def test_adamic(model, data, split_edge, evaluator, batch_size, args, device):
                                                  data.num_nodes)
     pos_train_edge = split_edge['train']['edge'].to(device)
     pos_train_pred = torch.ones(pos_train_edge.size(0))
-    pos_valid_pred, pos_valid_edge = eval('AA')(A, pos_val_edge)
-    neg_valid_pred, neg_valid_edge = eval('AA')(A, neg_val_edge)
+    pos_valid_pred, pos_valid_edge = eval('AA')(A_eval, pos_val_edge)
+    neg_valid_pred, neg_valid_edge = eval('AA')(A_eval, neg_val_edge)
     pos_test_pred, pos_test_edge = eval('AA')(A, pos_test_edge)
     neg_test_pred, neg_test_edge = eval('AA')(A, neg_test_edge)
     
