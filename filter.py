@@ -66,7 +66,7 @@ def main():
     use_params = sum(p.numel() for p in model.parameters() if p.requires_grad) > 0
     print('using params?', use_params)
     if use_params:
-        model.load_state_dict(torch.load(f'models_old/{args.checkpoint}'))
+        model.load_state_dict(torch.load(f'models/{args.checkpoint}'))
         
         
     parts = args.checkpoint.split("|")
