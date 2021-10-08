@@ -5,7 +5,9 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch_geometric.utils import negative_sampling
-
+import scipy.sparse as ssp
+import numpy as np
+from train_and_eval import resource_allocation
 import torch_sparse
 from adamic_utils import get_A, AA
 import torch_geometric.transforms as T
@@ -37,6 +39,7 @@ def main():
     parser.add_argument('--epochs', type=int)
     parser.add_argument('--use_feature', type=bool)
     parser.add_argument('--use_learnable_embedding', type=bool)
+#     parser.add_argument('--use_node_embedding', action="store_true", default=False)
     
     # other settings
     parser.add_argument('--device', type=int, default=0)
@@ -63,7 +66,7 @@ def main():
     use_params = sum(p.numel() for p in model.parameters() if p.requires_grad) > 0
     print('using params?', use_params)
     if use_params:
-        model.load_state_dict(torch.load(f'models/{args.checkpoint}'))
+        model.load_state_dict(torch.load(f'models_old/{args.checkpoint}'))
         
         
     parts = args.checkpoint.split("|")
@@ -91,7 +94,9 @@ def main():
     if True:
 #     if args.model in ['mlpcos', 'simplecos', 'adamic', 'simple']:
         adj_t = data.adj_t.cpu()
+#         print("before")
         A2 = adj_t @ adj_t
+#         print("after")
         A2 = torch_sparse.remove_diag(A2)
         A2 = A2.to_scipy("csc")
         # dont compute for edges that we are know positive
@@ -101,11 +106,12 @@ def main():
         selected = values.nonzero().squeeze(1)
 
         m = torch.cat([indices[:, selected].t(), values[selected].unsqueeze(1)], 1).long()
-        all_edges = m[:,:2].t().to(device)
+        all_edges = m[:,:2]
         
         print(f'using {all_edges.size()} edges')
 
-        if args.model != "adamic_ogb":
+        if args.model not in ["adamic_ogb", "resource_allocation"]:
+            all_edges = all_edges.t().to(device)
             with torch.no_grad():
                 for perm in tqdm(DataLoader(range(all_edges.size(1)), args.batch_size)):
                     edges = all_edges[:, perm]
@@ -113,10 +119,28 @@ def main():
                     edge_score = torch.cat([edges.t(), score.unsqueeze(1)], dim=1).cpu()
                     all_scores.append(edge_score)
             all_scores = torch.cat(all_scores, 0)
-        else:
+        elif args.model == "adamic_ogb":
+            all_edges = all_edges.t()
             A = get_A(data.adj_t, data.num_nodes)
             pred, edge = eval('AA')(A, all_edges.cpu())
             all_scores = torch.cat((edge, pred.unsqueeze(0)), 0).T
+        else:
+#             print("here")
+            assert args.model == "resource_allocation"
+            train_edges_raw = np.array(split_edge['train']['edge'])
+            train_edges_reverse = np.array(
+                [train_edges_raw[:, 1], train_edges_raw[:, 0]]).transpose()
+            train_edges = np.concatenate(
+                [train_edges_raw, train_edges_reverse], axis=0)
+            edge_weight = torch.ones(train_edges.shape[0], dtype=int)
+            A = ssp.csr_matrix(
+                (edge_weight, (train_edges[:, 0], train_edges[:, 1])), shape=(
+                    data.num_nodes, data.num_nodes)
+            )
+#             print("here")
+            pred = resource_allocation(A, all_edges.cpu(), batch_size=1024*8)
+            all_scores = torch.cat((all_edges.t(), pred.unsqueeze(0)), 0).T
+
          
     # construct edges on fly. too memory-intensive :/
 #     else:

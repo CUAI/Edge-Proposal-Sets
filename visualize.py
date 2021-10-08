@@ -27,7 +27,7 @@ def get_target(dataset):
 
 def show(dataset, rank_methods, filter_methods, kind, show_std,show_valid = True,  radius = None, top = None, top_baseline = None):
     print(dataset)
-    print_names = {"gcn" : "GCN", 'simple' : "Common", 'adamic_ogb': "Adamic", 'simplecos':"Cosine-Common", 'sage':"SAGE", "None": "None (Baseline)"}
+    print_names = {"gcn" : "GCN", 'simple' : "Common", 'adamic_ogb': "Adamic", 'simplecos':"Cosine-Common", 'sage':"SAGE", "None": "None (Baseline)", "resource_allocation": "RA"}
     target = get_target(dataset)
     all_results = []
     for rank_method in rank_methods:

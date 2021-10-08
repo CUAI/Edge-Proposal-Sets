@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 
 import torch_geometric.transforms as T
 from torch_geometric.nn import GCNConv, SAGEConv, TAGConv, JumpingKnowledge
+from torch.utils.checkpoint import checkpoint
 
 from torch_sparse import SparseTensor
 from torch_sparse import sum as sparse_sum
@@ -16,6 +17,21 @@ from datetime import datetime
 from tqdm import tqdm
 
 from pathlib import Path
+
+
+from typing import Union, Tuple
+from torch_geometric.typing import OptPairTensor, Adj, Size
+
+from torch import Tensor
+from torch.nn import Linear
+import torch.nn.functional as F
+from torch_sparse import SparseTensor, matmul
+from torch_geometric.nn.conv import MessagePassing
+
+# from gcn_lib.sparse.torch_vertex import GENConv
+# from gcn_lib.sparse.torch_nn import norm_layer
+# from torch.utils.checkpoint import checkpoint
+
 
 class DEA_GNN_JK(torch.nn.Module):
     def __init__(self, num_nodes, embed_dim, 
@@ -170,7 +186,234 @@ class GCN(torch.nn.Module):
         x = self.convs[-1](x, adj_t)
         return x
 
+    
 
+class DeeperGCN(torch.nn.Module):
+    def __init__(self, args):
+        super(DeeperGCN, self).__init__()
+
+        self.num_layers = 3
+        self.dropout =  0
+        self.block = "res+"
+
+        self.checkpoint_grad = False
+
+        hidden_channels = 128
+        conv = "gen"
+        aggr = "max"
+
+        t = "1.0"
+        self.learn_t = False
+        p = "1.0"
+        self.learn_p = False
+        y = "1.0"
+        self.learn_y = False
+
+        self.msg_norm = False
+        learn_msg_scale = False
+
+        norm = "batch"
+        mlp_layers = 1
+
+        self.scale_msg = False
+
+        if self.num_layers > 7:
+            self.checkpoint_grad = True
+
+        print('The number of layers {}'.format(self.num_layers),
+              'Aggregation method {}'.format(aggr),
+              'block: {}'.format(self.block))
+
+        if self.block == 'res+':
+            print('LN/BN->ReLU->GraphConv->Res')
+        elif self.block == 'res':
+            print('GraphConv->LN/BN->ReLU->Res')
+        elif self.block == 'dense':
+            raise NotImplementedError('To be implemented')
+        elif self.block == "plain":
+            print('GraphConv->LN/BN->ReLU')
+        else:
+            raise Exception('Unknown block Type')
+
+        self.gcns = torch.nn.ModuleList()
+        self.norms = torch.nn.ModuleList()
+
+        for layer in range(self.num_layers):
+
+            if conv == 'gen':
+                gcn = GENConv(hidden_channels, hidden_channels,
+                              aggr=aggr,
+                              t=t, learn_t=self.learn_t,
+                              p=p, learn_p=self.learn_p,
+                              y=y, learn_y=self.learn_y,
+                              msg_norm=self.msg_norm, learn_msg_scale=learn_msg_scale,
+                              norm=norm, mlp_layers=mlp_layers)
+            else:
+                raise Exception('Unknown Conv Type')
+
+            self.gcns.append(gcn)
+            self.norms.append(norm_layer(norm, hidden_channels))
+
+    def forward(self,  x, edge_index):
+
+        h = x
+
+        if self.block == 'res+':
+
+            h = self.gcns[0](h, edge_index)
+
+            for layer in range(1, self.num_layers):
+                h1 = self.norms[layer - 1](h)
+                h2 = F.relu(h1)
+                h2 = F.dropout(h2, p=self.dropout, training=self.training)
+
+                if self.checkpoint_grad:
+                    res = checkpoint(self.gcns[layer], h2, edge_index)
+                    h = res + h
+                else:
+                    h = self.gcns[layer](h2, edge_index) + h
+            # may remove relu(), the learnt embeddings should not be restricted by positive value
+            h = F.relu(self.norms[self.num_layers - 1](h))
+            h = F.dropout(h, p=self.dropout, training=self.training)
+
+        elif self.block == 'res':
+
+            h = F.relu(self.norms[0](self.gcns[0](h, edge_index)))
+            h = F.dropout(h, p=self.dropout, training=self.training)
+
+            for layer in range(1, self.num_layers):
+                h1 = self.gcns[layer](h, edge_index)
+                h2 = self.norms[layer](h1)
+                h = F.relu(h2) + h
+                h = F.dropout(h, p=self.dropout, training=self.training)
+
+        elif self.block == 'dense':
+            raise NotImplementedError('To be implemented')
+
+        elif self.block == 'plain':
+
+            h = F.relu(self.norms[0](self.gcns[0](h, edge_index)))
+            h = F.dropout(h, p=self.dropout, training=self.training)
+
+            for layer in range(1, self.num_layers):
+                h1 = self.gcns[layer](h, edge_index)
+                h2 = self.norms[layer](h1)
+                h = F.relu(h2)
+                h = F.dropout(h, p=self.dropout, training=self.training)
+        else:
+            raise Exception('Unknown block Type')
+
+        return h
+   
+    
+class SAGEConv2(MessagePassing):
+    r"""The GraphSAGE operator from the `"Inductive Representation Learning on
+    Large Graphs" <https://arxiv.org/abs/1706.02216>`_ paper
+    .. math::
+        \mathbf{x}^{\prime}_i = \mathbf{W}_1 \mathbf{x}_i + \mathbf{W}_2 \cdot
+        \mathrm{mean}_{j \in \mathcal{N(i)}} \mathbf{x}_j
+    Args:
+        in_channels (int or tuple): Size of each input sample. A tuple
+            corresponds to the sizes of source and target dimensionalities.
+        out_channels (int): Size of each output sample.
+        normalize (bool, optional): If set to :obj:`True`, output features
+            will be :math:`\ell_2`-normalized, *i.e.*,
+            :math:`\frac{\mathbf{x}^{\prime}_i}
+            {\| \mathbf{x}^{\prime}_i \|_2}`.
+            (default: :obj:`False`)
+        root_weight (bool, optional): If set to :obj:`False`, the layer will
+            not add transformed root node features to the output.
+            (default: :obj:`True`)
+        bias (bool, optional): If set to :obj:`False`, the layer will not learn
+            an additive bias. (default: :obj:`True`)
+        **kwargs (optional): Additional arguments of
+            :class:`torch_geometric.nn.conv.MessagePassing`.
+    """
+    def __init__(self, in_channels: Union[int, Tuple[int, int]],
+                 out_channels: int, normalize: bool = False,
+                 root_weight: bool = True,
+                 bias: bool = True, **kwargs):  # yapf: disable
+        kwargs.setdefault('aggr', 'mean')
+        super(SAGEConv2, self).__init__(**kwargs)
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.normalize = normalize
+        self.root_weight = root_weight
+
+        if isinstance(in_channels, int):
+            in_channels = (in_channels, in_channels)
+
+        self.lin_l = Linear(in_channels[0], out_channels, bias=bias)
+        if self.root_weight:
+            self.lin_r = Linear(in_channels[1], out_channels, bias=False)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.lin_l.reset_parameters()
+        if self.root_weight:
+            self.lin_r.reset_parameters()
+
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj,
+                size: Size = None) -> Tensor:
+        """"""
+        if isinstance(x, Tensor):
+            x: OptPairTensor = (x, x)
+
+        # propagate_type: (x: OptPairTensor)
+        out = self.propagate(edge_index, x=x, size=size)
+        out = self.propagate(edge_index, x=(out, None), size=size)
+        out = self.lin_l(out)
+
+        x_r = x[1]
+        if self.root_weight and x_r is not None:
+            out += self.lin_r(x_r)
+
+        if self.normalize:
+            out = F.normalize(out, p=2., dim=-1)
+
+        return out
+
+    def message(self, x_j: Tensor) -> Tensor:
+        return x_j
+
+    def message_and_aggregate(self, adj_t: SparseTensor,
+                              x: OptPairTensor) -> Tensor:
+        adj_t = adj_t.set_value(None, layout=None)
+        return matmul(adj_t, x[0], reduce=self.aggr)
+
+    def __repr__(self):
+        return '{}({}, {})'.format(self.__class__.__name__, self.in_channels,
+                                   self.out_channels)
+
+
+class SAGE2(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
+                 dropout):
+        super(SAGE2, self).__init__()
+
+        self.convs = torch.nn.ModuleList()
+        self.convs.append(SAGEConv2(in_channels, hidden_channels))
+        for _ in range(num_layers - 2):
+            self.convs.append(SAGEConv2(hidden_channels, hidden_channels))
+        self.convs.append(SAGEConv2(hidden_channels, out_channels))
+
+        self.dropout = dropout
+
+    def reset_parameters(self):
+        for conv in self.convs:
+            conv.reset_parameters()
+
+    def forward(self, x, adj_t):
+        for conv in self.convs[:-1]:
+            x = conv(x, adj_t)
+            x = F.relu(x)
+            x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.convs[-1](x, adj_t)
+        return x
+
+    
 class SAGE(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
                  dropout):
@@ -195,7 +438,26 @@ class SAGE(torch.nn.Module):
             x = F.dropout(x, p=self.dropout, training=self.training)
         x = self.convs[-1](x, adj_t)
         return x
-    
+
+class Ensemble(torch.nn.Module):
+    def __init__(self, model1, model2):
+        super(Ensemble, self).__init__()
+        self.linear = torch.nn.Linear(2, 1)
+        self.model1 = model1
+        for param in model1.parameters():
+            param.requires_grad = False
+        self.model2 = model2
+        for param in model2.parameters():
+            param.requires_grad = False
+        
+    def reset_parameters(self):
+        self.linear.reset_parameters()        
+
+    def forward(self,x , edges, adj):
+        x = torch.cat([self.model1(x , edges, adj), self.model2(x , edges, adj) ], dim = 1 )
+        x = self.linear(x)
+        return torch.sigmoid(x)    
+
 class LinkPredictor(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
                  dropout):
@@ -247,7 +509,7 @@ class CommonNeighborsPredictor(torch.nn.Module):
     def __init__(self, emb, in_channels, hidden_channels, out_channels, num_layers,
                  dropout, model_type='weighted'):
         super(CommonNeighborsPredictor, self).__init__()
-        assert model_type in ['mlpcos', 'simplecos', 'adamic', 'simple', 'adamic_ogb', 'katz']
+        assert model_type in ['mlpcos', 'simplecos', 'adamic', 'simple', 'adamic_ogb', "resource_allocation", 'katz']
         self.type = model_type
         if self.type == 'mlpcos':
             self.mlp = MLP(in_channels, hidden_channels, out_channels, num_layers,
@@ -269,7 +531,7 @@ class CommonNeighborsPredictor(torch.nn.Module):
         elif self.emb is not None:
             x = torch.cat([self.emb.weight, x], dim=1)
             
-        if self.type in ['adamic_ogb', 'katz']:
+        if self.type in ['adamic_ogb', "resource_allocation", 'katz']:
             return None
         common_neighbors = adj[edges[0]].to_torch_sparse_coo_tensor().mul(adj[edges[1]].to_torch_sparse_coo_tensor())
         
@@ -314,7 +576,7 @@ class CommonNeighborsPredictor(torch.nn.Module):
 
 
 def build_model(args, data, device):   
-    assert args.model in ['sage', 'gcn', 'dea', 'mlpcos', 'simplecos', 'adamic', 'simple', 'adamic_ogb', 'katz']
+    assert args.model in ['sage','sage2', 'gcn', 'dea','dea_512', 'mlpcos', 'simplecos', 'adamic', 'simple', 'adamic_ogb',  "resource_allocation",  'katz', 'ensemble_gcn_sage']
     emb = None
        
     if args.use_learnable_embedding:
@@ -337,6 +599,16 @@ def build_model(args, data, device):
             1, args.num_layers, 
             args.dropout).to(device)
         model = LinkGNN(emb, gnn, linkpred)
+    elif args.model == 'sage2':
+        gnn = SAGE2(
+            input_dim, args.hidden_channels, 
+            args.hidden_channels, args.num_layers, 
+            args.dropout).to(device)
+        linkpred = LinkPredictor(
+            args.hidden_channels, args.hidden_channels, 
+            1, args.num_layers, 
+            args.dropout).to(device)
+        model = LinkGNN(emb, gnn, linkpred)    
     elif args.model == 'gcn':
         gnn = GCN(
             input_dim, args.hidden_channels,
@@ -347,7 +619,14 @@ def build_model(args, data, device):
             1, args.num_layers, 
             args.dropout).to(device)
         model = LinkGNN(emb, gnn, linkpred)
-    elif args.model == "dea":
+    elif args.model == "deeper_gcn":
+        gnn = DeeperGCN().to(device)
+        linkpred = LinkPredictor(
+            args.hidden_channels, args.hidden_channels, 
+            1, args.num_layers, 
+            args.dropout).to(device)
+        model = LinkGNN(emb, gnn, linkpred)        
+    elif args.model == "dea" or args.model == "dea_512":
         model = DEA_GNN_JK(num_nodes=data.num_nodes, embed_dim=args.hidden_channels,
                    gnn_in_dim=input_dim, gnn_hidden_dim=args.hidden_channels, gnn_out_dim=args.hidden_channels,
                    gnn_num_layers=3, mlp_in_dim=args.hidden_channels, mlp_hidden_dim=args.hidden_channels,
@@ -355,7 +634,32 @@ def build_model(args, data, device):
                    dropout=args.dropout, gnn_batchnorm=True,
                    mlp_batchnorm=True,
                    K=2, jk_mode="max").to(device)
-    elif args.model in ['mlpcos', 'simplecos', 'adamic', 'simple', 'adamic_ogb', 'katz']:
+    elif args.model == "ensemble_gcn_sage":
+        # this only works for one case!!
+        import copy
+        args1 = copy.deepcopy(args)
+        args1.model = "gcn"
+        args1.use_feature = None
+        args1.use_learnable_embedding = None
+        args1 = default_model_configs(args1)
+        print(args1)
+        model1 = build_model(args1, data, device)
+        model1.load_state_dict(torch.load(f"models/{args.dataset}_gcn||0|0.pt"))
+        print("floaded models/{args.dataset}_gcn||0|0.pt")
+        
+        args2 = copy.deepcopy(args)
+        args2.model = "sage"
+        args2.use_feature = None
+        args2.use_learnable_embedding = None
+        args2 = default_model_configs(args2)
+        print(args2)
+        model2 = build_model(args2, data, device)
+        model2.load_state_dict(torch.load(f"models/{args.dataset}_sage||0|0.pt"))
+        print(f"loaded models/{args.dataset}_sage||0|0.pt")
+        
+        model = Ensemble(model1, model2).to(device)
+ 
+    elif args.model in ['mlpcos', 'simplecos', 'adamic', 'simple', 'adamic_ogb', 'katz', "resource_allocation"]:
         # 'adamic', 'simple' should have 0 input dim
         # 'adamic_ogb' refers to the ogb implementation; in this case the model is not used
         model = CommonNeighborsPredictor(emb,
@@ -382,14 +686,17 @@ def default_model_configs(args):
         default_dict["use_feature"] = False
         default_dict["use_learnable_embedding"] = True
         default_dict["batch_size"] = 64 * 1024
-        if args.model in ['sage', 'gcn', 'dea']:
+        if args.model in ['sage', 'sage2', 'gcn', 'dea', 'dea_512', "ensemble_gcn_sage"]:
             default_dict["num_layers"] = 2 
             default_dict["hidden_channels"] = 256
             default_dict["dropout"] = 0.5 
             default_dict["lr"] = 0.005 
             default_dict["epochs"] = 200
-            if args.model in ['dea']:
+            if args.model in ['dea', 'dea_512']:
+                default_dict["num_layers"] = 3
                 default_dict["epochs"] = 400
+                if args.model == 'dea_512':
+                    default_dict["hidden_channels"] = 512
         if args.model in ['mlpcos', 'simplecos']:
             default_dict["num_layers"] = 2 
             default_dict["hidden_channels"] = 256
@@ -406,12 +713,17 @@ def default_model_configs(args):
         default_dict["use_feature"] = True
         default_dict["use_learnable_embedding"] = True
         default_dict["batch_size"] = 16 * 1024
-        if args.model in ['sage', 'gcn']:
+        if args.model in ['sage', 'sage2', 'gcn','dea', 'dea_512']:
             default_dict["num_layers"] = 3
             default_dict["hidden_channels"] = 256
             default_dict["dropout"] = 0.0
             default_dict["lr"] = 0.001
             default_dict["epochs"] = 200
+            if args.model in ['dea', 'dea_512']:
+                default_dict["num_layers"] = 4
+                default_dict["epochs"] = 400
+                if args.model == 'dea_512':
+                    default_dict["hidden_channels"] = 512
         if args.model in ['mlpcos', 'simplecos']:
             default_dict["num_layers"] = 3
             default_dict["hidden_channels"] = 256
@@ -424,7 +736,7 @@ def default_model_configs(args):
         default_dict["use_feature"] = True
         default_dict["use_learnable_embedding"] = True
         default_dict["batch_size"] = 64 * 1024
-        if args.model in ['sage', 'gcn']:
+        if args.model in ['sage', 'sage2', 'gcn']:
             default_dict["num_layers"] = 3
             default_dict["hidden_channels"] = 256
             default_dict["dropout"] = 0.0
@@ -443,7 +755,7 @@ def default_model_configs(args):
         default_dict["use_feature"] = False
         default_dict["use_learnable_embedding"] = True
         default_dict["batch_size"] = 16*1024
-        if args.model in ['sage', 'gcn']:
+        if args.model in ['sage', 'sage2', 'gcn']:
             default_dict["num_layers"] = 3
             default_dict["hidden_channels"] = 300
             default_dict["dropout"] = 0.0
@@ -468,7 +780,7 @@ def default_model_configs(args):
 #     if args.dataset in ['ddi']:
 #         args.runs = 20
 # probably too long to run ...            
-    if args.model in ['adamic', 'simple', 'adamic_ogb', 'katz']:
+    if args.model in ['adamic', 'simple', 'adamic_ogb', "resource_allocation" , 'katz', "ensemble_gcn_sage"]:
         args.use_feature = False
         args.use_learnable_embedding = False
     if args.model == 'simplecos' and args.dataset != "email":

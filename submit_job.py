@@ -7,12 +7,14 @@ import os
 from multiprocessing import Process
 from rank import get_dataset
 import numpy as np
+import torch
     
 def is_no_param_models_bydefault(dataset, model):
     return model in ['adamic', 'simple', 'adamic_ogb'] or (dataset in ["collab" , "reddit"] and model in ["simplecos"])
     
 def gen_model(dataset, model, model_args = ""):
-    return f'python -u rank.py --dataset {dataset} --model {model} {model_args} --save_models'
+    # only generate one filter model by default
+    return f'python -u rank.py --dataset {dataset} --model {model} {model_args} --save_models --runs 1'
 
 
 def filter_step(dataset, model, checkpoint, model_args = ""):
@@ -86,7 +88,7 @@ def submit_experiments(run_experiment, experiment_configs, run_local):
         for p in processes:
             p.join()
     elif has_sbatch_job:
-        print("Need tp wait fot sbatch job to finish. Please run the same command again after the jobs are done")
+        print("Need to wait fot sbatch job to finish. Please run the same command again after the jobs are done")
         return
     print("Preparations Done")
             
@@ -112,17 +114,33 @@ def submit_experiments(run_experiment, experiment_configs, run_local):
         for p in processes:
             p.join()
 
-
+def print_result(dataset, filter_method, rank_method, num, kind):
+    result_files = [f for f in os.listdir('curves') if f.startswith(dataset + "_" + rank_method + kind + "|" + dataset + "_" + filter_method + "__0_0_sorted_edges|" + str(num) +"|")]
+    curves = np.array([torch.load(f'curves/{c}') for c in result_files])
+    means = curves.mean(0)
+    stds = curves.std(0)
+    print(f"Final Test: {means[2]:.2f} ± {stds[2]:.2f}")
+    
 ###################################### customize experiments ######################################
 
-def run_standard_experiment(dataset, filter_model, rank_model, num):
+def run_standard_experiment(dataset, filter_model, rank_model, num, runs):
     filter_result = f"{dataset}_{filter_model}__0_0_sorted_edges.pt"
-    python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --num_sorted_edge {num} --sorted_edge_path {filter_result} --runs 10'     
+    python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --num_sorted_edge {num} --sorted_edge_path {filter_result} --runs {runs}'     
     return python_script
 
-def run_standard_valid_experiment(dataset, filter_model, rank_model, num):
+def run_only_supervision_experiment(dataset, filter_model, rank_model, num):
     filter_result = f"{dataset}_{filter_model}__0_0_sorted_edges.pt"
-    python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --num_sorted_edge {num} --sorted_edge_path {filter_result} --runs 1 --valid_proposal'     
+    python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --num_sorted_edge {num} --sorted_edge_path {filter_result} --runs 10 --only_supervision'     
+    return python_script
+
+def run_also_supervision_experiment(dataset, filter_model, rank_model, num):
+    filter_result = f"{dataset}_{filter_model}__0_0_sorted_edges.pt"
+    python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --num_sorted_edge {num} --sorted_edge_path {filter_result} --runs 10 --also_supervision'     
+    return python_script 
+
+def run_standard_valid_experiment(dataset, filter_model, rank_model, num, runs):
+    filter_result = f"{dataset}_{filter_model}__0_0_sorted_edges.pt"
+    python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --num_sorted_edge {num} --sorted_edge_path {filter_result} --runs {runs} --valid_proposal'     
     return python_script
 
 
@@ -141,6 +159,16 @@ def run_sweep_valid_experiment(dataset, filter_model, rank_model, sweep_min, swe
     python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --sweep_min {sweep_min} --sweep_max {sweep_max} --sweep_num {sweep_num} --sorted_edge_path {filter_result} --runs {runs} --valid_proposal'    
     return python_script
 
+def run_only_supervision_sweep_experiment(dataset, filter_model, rank_model, sweep_min, sweep_num, runs, sweep_max):
+    filter_result = f"{dataset}_{filter_model}__0_0_sorted_edges.pt"
+    python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --sweep_min {sweep_min} --sweep_max {sweep_max} --sweep_num {sweep_num} --sorted_edge_path {filter_result} --runs {runs} --only_supervision'    
+    return python_script
+
+def run_also_supervision_sweep_experiment(dataset, filter_model, rank_model, sweep_min, sweep_num, runs, sweep_max):
+    filter_result = f"{dataset}_{filter_model}__0_0_sorted_edges.pt"
+    python_script = f'python -u rank.py --dataset {dataset} --model {rank_model} --sweep_min {sweep_min} --sweep_max {sweep_max} --sweep_num {sweep_num} --sorted_edge_path {filter_result} --runs {runs} --also_supervision'    
+    return python_script
+
 
 def run_baseline_experiment(dataset, filter_model, rank_model, num):
     filter_result = f"{dataset}_{filter_model}__0_0_sorted_edges.pt"
@@ -157,22 +185,41 @@ if __name__ == "__main__":
     Path("filtered_edges").mkdir(exist_ok=True)
     run_local = True
     parser = argparse.ArgumentParser(description='models')
+    parser.add_argument('--reproduce', type=str)
+    parser.add_argument('--show', type=str)
     args = parser.parse_args()
     #### note: it is assumed that the first argument is base model that needs to be generated first
+    if args.reproduce == "ddi":
+        ddi_experiments_configs = {"ddi": [
+                              ("gcn", "sage", 530000, 10),
+                           ],
+                                    }    
+        submit_experiments(run_standard_experiment, ddi_experiments_configs, run_local)        
+        
+    if args.reproduce == "collab":
+        collab_experiments_configs = {"collab": [
+                              # only run once to save time since it is deterministic 
+                              ("adamic_ogb", "adamic_ogb", 200000, 1),
+                           ],
+                                    }    
+        submit_experiments(run_standard_valid_experiment, collab_experiments_configs, run_local)       
+        
+    if args.reproduce == "ppa":
+        ppa_experiments_configs = { "ppa": [
+                               # only run once to save time since it is deterministic 
+                              ("resource_allocation", "resource_allocation", 4000000, 1),
+                            ],
+                                    }    
+        submit_experiments(run_standard_experiment, ppa_experiments_configs, run_local)
+        
 
-    ddi_experiments_configs = {"ddi": [
-                          ("gcn", "sage", 530000),
-                       ],
-                                }    
-    submit_experiments(run_standard_experiment, ddi_experiments_configs, run_local)
-
-    collab_experiments_configs = {"collab": [
-                          ("adamic_ogb", "adamic_ogb", 200000),
-                       ],
-                                }    
-    submit_experiments(run_standard_valid_experiment, collab_experiments_configs, run_local)
-
-    
+    if args.show == "ddi":
+        print_result("ddi", "gcn", "sage", 530000, "")
+    if args.show == "collab":
+        print_result("collab", "adamic_ogb", "adamic_ogb", 200000, "_validproposal")
+    if args.show == "ppa":
+        print_result("ppa", "resource_allocation", "resource_allocation", 4000000, "")
+        
     ##### sweeping example #####
 #     sweep_experiments_configs = {"ddi": [
 #                           ("gcn", "gcn", 510000, 4, 5, 550000),
@@ -204,4 +251,3 @@ if __name__ == "__main__":
 #                                 }
 #     submit_experiments(run_sweep_experiment, sweep_experiments_configs, run_local)
 #     submit_experiments(run_sweep_valid_experiment, sweep_experiments_configs, run_local)
-

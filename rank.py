@@ -14,7 +14,7 @@ from email_data.data import EmailDataset
 from twitch.data import TwitchDataset
 from fb.data import FBDataset
 from models import build_model, default_model_configs
-from train_and_eval import train, test, hits, evaluators, test_adamic, test_katz
+from train_and_eval import train, test, hits, evaluators, test_adamic, test_katz, test_resource_allocation
 
 from torch_sparse import SparseTensor
 from torch_sparse import sum as sparse_sum
@@ -39,6 +39,8 @@ def get_dataset(dataset):
 
     if dataset == "ddi":
         dataset = PygLinkPropPredDataset(name='ogbl-ddi')
+    elif dataset == "ppa":
+        dataset = PygLinkPropPredDataset(name='ogbl-ppa')        
     elif dataset == "collab":
         dataset = PygLinkPropPredDataset(name='ogbl-collab')
     elif dataset == "email":
@@ -98,20 +100,29 @@ def get_data(args):
     # features
     if not args.use_feature:
         data.x = None
-    if args.dataset == "ddi" and args.use_feature:
-        print('load spectral features:')
-        data.x = spectral(data, edge_index, "ddi")
-#         print('load extra features:')
-#         x_df = pd.read_csv('ddi/x_feature.csv')
-#         x_feature_numpy = x_df.to_numpy()
-#         x_feature = torch.Tensor(x_feature_numpy)
-#         print('extra feature shape:', x_feature.shape)
+#     if args.dataset == "ddi" and args.use_feature:
+        
+# #         data.x = spectral(data, edge_index, "ddi")
+# #             if args.use_node_embedding:
+#         if args.use_node_embedding:
+#             print('load node2vec features:')
+#             data.x = torch.load('ddi_embedding.pt', map_location='cpu')
 
-#         # Normalize to 0-1
-#         x_max = torch.max(x_feature, dim=0, keepdim=True)[0]
-#         x_min = torch.min(x_feature, dim=0, keepdim=True)[0]
-#         data.x = (x_feature - x_min) / (x_max - x_min + 1e-6)
+# #         print('load extra features:')
+# #         x_df = pd.read_csv('ddi/x_feature.csv')
+# #         x_feature_numpy = x_df.to_numpy()
+# #         x_feature = torch.Tensor(x_feature_numpy)
+# #         print('extra feature shape:', x_feature.shape)
+
+# #         # Normalize to 0-1
+# #         x_max = torch.max(x_feature, dim=0, keepdim=True)[0]
+# #         x_min = torch.min(x_feature, dim=0, keepdim=True)[0]
+# #         data.x = (x_feature - x_min) / (x_max - x_min + 1e-6)
     
+#     if args.dataset == "collab" and args.use_node_embedding:
+#         print('load node2vec features:')
+#         data.x = torch.cat([data.x, torch.load('collab_embedding.pt', map_location='cpu')], dim = 1)
+        
     return edge_index, edge_weight, split_edge, data
 
 
@@ -130,6 +141,7 @@ def main():
     parser.add_argument('--also_supervision', action="store_true", default=False)
     parser.add_argument('--gen_dataset_only', action="store_true", default=False)
     parser.add_argument('--valid_proposal', action="store_true", default=False)
+#     parser.add_argument('--use_node_embedding', action="store_true", default=False)
     
     # save results
     parser.add_argument('--out_name', type=str)
@@ -171,7 +183,8 @@ def main():
             args.out_name += "_alsos"
         elif args.valid_proposal:
             args.out_name += "_validproposal"
-
+#         elif args.use_node_embedding:
+#             args.out_name += "_node2vec"
     ##############
     ## load data and model
     ##############
@@ -304,6 +317,7 @@ def main():
         for run in range(args.runs):
             model.reset_parameters()
             use_params = sum(p.numel() for p in model.parameters() if p.requires_grad) > 0
+            print(sum(p.numel() for p in model.parameters() if p.requires_grad))
             if use_params:
                 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
             else:
@@ -321,12 +335,15 @@ def main():
                     loss = -1
 
                 if epoch % args.eval_steps == 0:
-                    if args.model not in ["adamic_ogb", "katz"]:
+                    if args.model not in ["adamic_ogb", "resource_allocation","katz"]:
                         results = test(model, data, split_edge, evaluator,
                                    args.batch_size, args, device)
                     elif args.model == "adamic_ogb":
                         results = test_adamic(model, data, split_edge, evaluator,
                                    args.batch_size, args, device)
+                    elif args.model == "resource_allocation":
+                        results = test_resource_allocation(model, data, split_edge, evaluator,
+                                   args.batch_size, args, device)    
                     elif args.model == "katz":
                         results = test_katz(model, data, split_edge, evaluator,
                                    args.batch_size, args, device)
