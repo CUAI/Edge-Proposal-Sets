@@ -44,7 +44,7 @@ def train(model, data, dataset_name, split_edge, optimizer, batch_size, use_para
 
         if use_params:
             optimizer.zero_grad()
-        pos_edge = to_undirected(pos_train_edge[perm].t(), data.num_nodes)
+        pos_edge = to_undirected(pos_train_edge[perm].t(), num_nodes=data.num_nodes)
         
         if model_str in ['gcn', 'sage', "dea",'dea_512']:
             if dataset_name in ["collab"] :

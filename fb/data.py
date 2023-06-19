@@ -113,7 +113,7 @@ class FBDataset(InMemoryDataset):
         torch.save(edge_split, self.processed_paths[2])
 
         print('Saving...')
-        data.edge_index = torch_geometric.utils.to_undirected(data.edge_index, self._num_nodes)
+        data.edge_index = to_undirected(data.edge_index, num_nodes= self._num_nodes)
         torch.save(self.collate([data]), self.processed_paths[0])
 
     def get_edge_split(self):
