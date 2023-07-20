@@ -208,7 +208,7 @@ def train(model, data, split_edge, optimizer, batch_size, use_params, model_str)
         if use_params:
             optimizer.zero_grad()
 
-        pos_edge = to_undirected(pos_train_edge[perm].t(), data.num_nodes)
+        pos_edge = to_undirected(pos_train_edge[perm].t(), num_nodes=data.num_nodes)
         
         if model_str in ['gcn', 'sage']:
             neg_edge = torch.randint(0, data.num_nodes, pos_edge.size(),dtype=torch.long, device=pos_edge.device)
